@@ -328,6 +328,8 @@ export async function handleRequest(
         intent.province ?? null,
         !!intent.ships_nationwide || intent.location_importance === "indifferent",
       );
+      // Solo cuenta para el límite diario si la búsqueda realmente se hizo.
+      if (list === null) return [];
       await userDb
         .from("intents")
         .update({ metadata: { ...row.metadata, web_used: true, suggestions: list.length } })

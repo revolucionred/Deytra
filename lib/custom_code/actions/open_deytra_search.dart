@@ -278,9 +278,14 @@ class _DeytraSearchDialogState extends State<_DeytraSearchDialog> {
           .toList();
       _expanded = data['expanded_radius'] == true;
       _place = intent is Map ? _text(intent['city']) : '';
-      _category = intent is Map
-          ? _text(intent['category_slug']).replaceAll('-', ' ')
-          : '';
+      final slugs = intent is Map && intent['category_slugs'] is List
+          ? (intent['category_slugs'] as List).whereType<String>().toList()
+          : <String>[];
+      if (slugs.isEmpty && intent is Map) {
+        final one = _text(intent['category_slug']);
+        if (one.isNotEmpty) slugs.add(one);
+      }
+      _category = slugs.take(4).map(_readable).join(', ');
       _pendingAnswer = null;
       _fieldError = null;
       _uncertain = false;
@@ -360,7 +365,7 @@ class _DeytraSearchDialogState extends State<_DeytraSearchDialog> {
         'locale_hint': 'es',
         if (_intentId != null) 'previous_intent_id': _intentId,
         if (_pendingAnswer != null) 'clarification_answer': _pendingAnswer,
-      }).timeout(const Duration(seconds: 30));
+      }).timeout(const Duration(seconds: 55));
       if (!mounted || attempt != _attempt) return;
       if (client.auth.currentUser?.id != _ownerId ||
           client.auth.currentSession == null) {
@@ -444,6 +449,38 @@ class _DeytraSearchDialogState extends State<_DeytraSearchDialog> {
           {FontWeight weight = FontWeight.w400, Color color = _charcoal}) =>
       GoogleFonts.plusJakartaSans(
           fontSize: size, fontWeight: weight, color: color, height: 1.4);
+
+  static const Map<String, String> _names = {
+    'jardineria': 'jardinería',
+    'paisajismo': 'paisajismo',
+    'viveros-plantas': 'viveros y plantas',
+    'hogar-jardin': 'hogar y jardín',
+    'decoracion': 'decoración',
+    'carpinteria': 'carpintería',
+    'pintura': 'pintura',
+    'comunicacion-negocios': 'comunicación para negocios',
+    'redes-sociales': 'redes sociales',
+    'diseno-grafico': 'diseño gráfico',
+    'creadores-contenido': 'creadores de contenido',
+    'autos-mecanica': 'autos y mecánica',
+    'nutricion': 'nutrición',
+    'comida-casera': 'comida casera',
+    'recetas-contenido': 'recetas',
+    'deporte-entrenamiento': 'deporte y entrenamiento',
+    'musica': 'música',
+    'clases-particulares': 'clases particulares',
+    'educacion': 'educación',
+    'reposteria': 'repostería',
+    'herreria': 'herrería',
+    'plomeria': 'plomería',
+    'cuidado-ninos': 'cuidado de niños',
+    'cuidado-mayores': 'cuidado de mayores',
+    'tramites': 'trámites',
+    'fotografia': 'fotografía',
+  };
+
+  static String _readable(String slug) =>
+      _names[slug] ?? slug.replaceAll('-', ' ');
 
   Widget _badge(String label, IconData icon, {bool warning = false}) =>
       Container(
@@ -750,8 +787,8 @@ class _DeytraSearchDialogState extends State<_DeytraSearchDialog> {
   List<Widget> _body() {
     if (_busy || _status == 'loading')
       return [
-        _statePanel(Icons.search, 'Revisando tu búsqueda',
-            'Estamos consultando las propuestas del catálogo de Deytra.',
+        _statePanel(Icons.search, 'Buscando para vos',
+            'Revisamos quién lo ofrece en Deytra y, si hace falta, también buscamos en internet. Puede tardar unos segundos.',
             loading: true),
         _notice(
             'Si cerrás, la búsqueda podría guardarse aunque no veas el resultado.'),
@@ -1022,10 +1059,11 @@ class _DeytraSearchDialogState extends State<_DeytraSearchDialog> {
                                               Padding(
                                                   padding:
                                                       const EdgeInsets.only(
-                                                          top: 10),
-                                                  child: _badge(
-                                                      'Categoría interpretada: $_category',
-                                                      Icons.category_outlined)),
+                                                          top: 8),
+                                                  child: Text(
+                                                      'Lo buscamos en: $_category',
+                                                      style: _type(13,
+                                                          color: _muted))),
                                           ])),
                                 ..._body(),
                                 if (!_busy &&

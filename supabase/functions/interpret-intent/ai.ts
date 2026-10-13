@@ -23,11 +23,24 @@ export type Suggestion = {
   scope: "local" | "nacional";
 };
 
+/** Acepta el secreto aunque se haya pegado con texto de más: toma solo la clave. */
+export function cleanKey(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const hit = raw.match(/sk-ant-[A-Za-z0-9_\-]{20,}/);
+  const key = (hit ? hit[0] : raw).trim();
+  return /^[\x21-\x7e]+$/.test(key) ? key : undefined;
+}
+
 async function callClaude(
-  key: string,
+  rawKey: string,
   body: Record<string, unknown>,
   timeoutMs: number,
 ): Promise<any | null> {
+  const key = cleanKey(rawKey);
+  if (!key) {
+    console.error("[deytra-ai] clave con formato inválido");
+    return null;
+  }
   try {
     const res = await fetch(API, {
       method: "POST",
@@ -40,12 +53,17 @@ async function callClaude(
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) {
-      console.error("[deytra-ai] status", res.status);
+      let kind = "";
+      try {
+        kind = String((await res.json())?.error?.type ?? "").slice(0, 60);
+      } catch { /* sin cuerpo */ }
+      console.error("[deytra-ai] status", res.status, kind);
       return null;
     }
     return await res.json();
   } catch (e) {
-    console.error("[deytra-ai] request failed", String(e).slice(0, 120));
+    // Nunca se registra el mensaje completo: podría contener la clave.
+    console.error("[deytra-ai] request failed", (e as Error)?.name ?? "error");
     return null;
   }
 }
@@ -129,8 +147,8 @@ export async function aiWebSuggestions(
   city: string | null,
   province: string | null,
   nationwide: boolean,
-): Promise<Suggestion[]> {
-  if (!key || !query) return [];
+): Promise<Suggestion[] | null> {
+  if (!key || !query) return null;
   const where = nationwide
     ? "con envío o atención a todo el país"
     : city
@@ -161,7 +179,7 @@ export async function aiWebSuggestions(
     { max_tokens: 1200, system, messages: [{ role: "user", content: user }], tools: [tool] },
     28000,
   );
-  if (!msg) return [];
+  if (!msg) return null;
   // Links realmente vistos en los resultados: evita links inventados.
   const seen = new Set<string>();
   for (const block of msg.content ?? []) {
