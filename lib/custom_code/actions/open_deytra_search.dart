@@ -12,6 +12,7 @@ import 'package:flutter/material.dart' hide RepeatMode;
 // FlutterFlow: Include BuildContext; String rawText/entityId; no return value.
 import 'dart:async';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show FunctionException;
 
 Future<void> openDeytraSearch(
@@ -70,6 +71,9 @@ class _DeytraSearchDialogState extends State<_DeytraSearchDialog> {
   bool _needsLocationAnswer = false;
   int _attempt = 0;
   List<Map<String, dynamic>> _matches = [];
+  List<Map<String, dynamic>> _suggestions = [];
+  bool _expanded = false;
+  String _place = '';
   @override
   void initState() {
     super.initState();
@@ -179,6 +183,7 @@ class _DeytraSearchDialogState extends State<_DeytraSearchDialog> {
       _busy = false;
       _status = 'error';
       _matches = [];
+      _suggestions = [];
       if (invoked && afterWrite.contains(code)) _pendingAnswer = null;
       _uncertain = invoked &&
           !beforeWrite.contains(code) &&
@@ -262,6 +267,17 @@ class _DeytraSearchDialogState extends State<_DeytraSearchDialog> {
       _question = question;
       _needsLocationAnswer = needsLocationAnswer;
       _matches = checked;
+      _suggestions = (data['suggestions'] is List ? data['suggestions'] as List : const [])
+          .whereType<Map>()
+          .where((x) =>
+              x['name'] is String &&
+              x['url'] is String &&
+              (x['url'] as String).startsWith('http'))
+          .map((x) => Map<String, dynamic>.from(x))
+          .take(4)
+          .toList();
+      _expanded = data['expanded_radius'] == true;
+      _place = intent is Map ? _text(intent['city']) : '';
       _category = intent is Map
           ? _text(intent['category_slug']).replaceAll('-', ' ')
           : '';
@@ -283,6 +299,7 @@ class _DeytraSearchDialogState extends State<_DeytraSearchDialog> {
       _busy = true;
       _status = 'loading';
       _matches = [];
+      _suggestions = [];
       _fieldError = null;
       _error = '';
       _canRetry = false;
@@ -556,7 +573,12 @@ class _DeytraSearchDialogState extends State<_DeytraSearchDialog> {
               ]),
               const SizedBox(height: 12),
               Wrap(spacing: 6, runSpacing: 6, children: [
-                _badge(city.isEmpty ? 'Ubicación sin informar' : city,
+                _badge(
+                    city.isEmpty
+                        ? 'Ubicación sin informar'
+                        : match['distance_km'] is num
+                            ? '$city · a ${(match['distance_km'] as num).round()} km'
+                            : city,
                     Icons.location_on_outlined),
                 _badge(_modality(match['modality']), Icons.laptop_outlined),
               ]),
@@ -778,21 +800,27 @@ class _DeytraSearchDialogState extends State<_DeytraSearchDialog> {
           ),
         ),
         if (_needsLocationAnswer)
-          Text('Ciudad con mayúscula inicial. Ej.: Córdoba.',
+          Text('Ej.: Funes, Roldán o Rosario.',
               style: _type(13, color: _muted)),
       ];
     if (_status == 'offer_saved')
       return [
-        _statePanel(Icons.lock_outline, 'Tu oferta quedó guardada',
-            'Es privada y aún no está publicada.'),
-        _notice('Para buscar propuestas, describí lo que necesitás.'),
+        _statePanel(Icons.storefront_outlined, 'Parece que querés ofrecer algo',
+            'Para que te encuentren, publicalo desde "Ofrecer lo que hago" en el inicio.'),
+        _notice('Si en realidad estás buscando, contalo como necesidad. '
+            'Ej.: "Busco quien me corte el pasto".'),
       ];
     if (_status == 'empty')
       return [
-        _statePanel(Icons.search_off_outlined, 'Todavía no hay coincidencias',
-            'No encontramos propuestas con estos detalles en el catálogo consultado.'),
-        _notice('Cerrá esta ventana y probá con el servicio y la ciudad. '
-            'Ej.: “Necesito un electricista en Córdoba”.'),
+        _statePanel(
+            Icons.travel_explore_outlined,
+            _suggestions.isEmpty
+                ? 'Todavía nadie lo ofrece en Deytra'
+                : 'Todavía nadie lo ofrece en Deytra, pero encontré opciones',
+            _place.isEmpty
+                ? 'Apenas alguien lo publique, va a aparecer acá.'
+                : 'Buscamos cerca de $_place. Apenas alguien lo publique, va a aparecer acá.'),
+        ..._suggestionSection(),
       ];
     return [
       Padding(
@@ -819,15 +847,92 @@ class _DeytraSearchDialogState extends State<_DeytraSearchDialog> {
                 style: _type(13, weight: FontWeight.w600)),
             children: [
               Text(
-                  'El orden usa reglas de categoría, texto y modalidad, '
-                  'con los filtros que permiten los datos disponibles. '
-                  'No es una garantía de afinidad. La ubicación, el horario o el '
-                  'presupuesto pueden requerir confirmación.',
+                  'Ordenadas por pertinencia y cercanía. '
+                  'Confirmá horario y presupuesto con cada persona antes de acordar.',
                   style: _type(13, color: _muted))
             ],
           )),
+      if (_expanded)
+        _notice('No había opciones a menos de 30 km, así que ampliamos la búsqueda.',
+            icon: Icons.radar_outlined),
       ..._matches.map(_card),
+      ..._suggestionSection(),
     ];
+  }
+
+  List<Widget> _suggestionSection() {
+    if (_suggestions.isEmpty) return const [];
+    return [
+      Padding(
+          padding: const EdgeInsets.only(top: 24, bottom: 4),
+          child: Text('También encontré en internet',
+              style: _type(18, weight: FontWeight.w700))),
+      Text('Negocios y cuentas externas a Deytra. Revisalos antes de comprar o contratar.',
+          style: _type(13, color: _muted)),
+      ..._suggestions.map(_suggestionCard),
+    ];
+  }
+
+  Widget _suggestionCard(Map<String, dynamic> s) {
+    final kind = _text(s['kind'], 'negocio');
+    final icon = kind == 'instagram'
+        ? Icons.photo_camera_outlined
+        : kind == 'tienda'
+            ? Icons.shopping_bag_outlined
+            : kind == 'profesional'
+                ? Icons.person_outline
+                : Icons.storefront_outlined;
+    final scope = s['scope'] == 'nacional' ? 'Envíos a todo el país' : 'En tu zona';
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: _line)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                  color: _cream, borderRadius: BorderRadius.circular(11)),
+              child: Icon(icon, color: _burnt, size: 19)),
+          const SizedBox(width: 12),
+          Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('SUGERENCIA EXTERNA',
+                style: _type(10, weight: FontWeight.w700, color: _muted)),
+            const SizedBox(height: 3),
+            Text(_text(s['name']), style: _type(17, weight: FontWeight.w700)),
+          ])),
+        ]),
+        if (_text(s['description']).isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Text(_text(s['description']), style: _type(14, color: _muted)),
+        ],
+        const SizedBox(height: 10),
+        _badge(scope, Icons.local_shipping_outlined),
+        const SizedBox(height: 12),
+        SizedBox(
+          width: double.infinity,
+          child: TextButton(
+            onPressed: () => launchUrl(Uri.parse(_text(s['url'])),
+                mode: LaunchMode.externalApplication),
+            style: TextButton.styleFrom(
+              backgroundColor: _cream,
+              minimumSize: const Size(0, 46),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  side: const BorderSide(color: _line)),
+            ),
+            child: Text(kind == 'instagram' ? 'Ver en Instagram' : 'Abrir sitio',
+                style: _type(14, weight: FontWeight.w700)),
+          ),
+        ),
+      ]),
+    );
   }
 
   @override
