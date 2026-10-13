@@ -31,39 +31,58 @@ export function cleanKey(raw: string | undefined): string | undefined {
   return /^[\x21-\x7e]+$/.test(key) ? key : undefined;
 }
 
+async function post(key: string, body: Record<string, unknown>, timeoutMs: number) {
+  return await fetch(API, {
+    method: "POST",
+    headers: {
+      "x-api-key": key,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ model: MODEL, ...body }),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+}
+
 async function callClaude(
   rawKey: string,
   body: Record<string, unknown>,
   timeoutMs: number,
+  label: string,
 ): Promise<any | null> {
   const key = cleanKey(rawKey);
   if (!key) {
     console.error("[deytra-ai] clave con formato inválido");
     return null;
   }
+  const started = Date.now();
   try {
-    const res = await fetch(API, {
-      method: "POST",
-      headers: {
-        "x-api-key": key,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ model: MODEL, ...body }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    // Sin razonamiento extendido: respuestas cortas y rápidas, sin gastar la salida pensando.
+    let res = await post(key, { ...body, thinking: { type: "disabled" } }, timeoutMs);
+    if (res.status === 400) {
+      // Si el modelo no acepta desactivarlo, se reintenta igual pero con más margen de salida.
+      const max = Number(body.max_tokens ?? 1000);
+      res = await post(
+        key,
+        { ...body, max_tokens: Math.max(max * 4, 4000) },
+        Math.max(1000, timeoutMs - (Date.now() - started)),
+      );
+    }
     if (!res.ok) {
       let kind = "";
       try {
         kind = String((await res.json())?.error?.type ?? "").slice(0, 60);
       } catch { /* sin cuerpo */ }
-      console.error("[deytra-ai] status", res.status, kind);
+      console.error("[deytra-ai]", label, "status", res.status, kind);
       return null;
     }
-    return await res.json();
+    const msg = await res.json();
+    const types = (msg?.content ?? []).map((b: any) => b?.type).join(",");
+    console.log("[deytra-ai]", label, "ok", msg?.stop_reason, types, `${Date.now() - started}ms`);
+    return msg;
   } catch (e) {
     // Nunca se registra el mensaje completo: podría contener la clave.
-    console.error("[deytra-ai] request failed", (e as Error)?.name ?? "error");
+    console.error("[deytra-ai]", label, "request failed", (e as Error)?.name ?? "error");
     return null;
   }
 }
@@ -76,15 +95,22 @@ function textOf(msg: any): string {
 }
 
 function firstJson(text: string, open: "{" | "["): any | null {
+  // Primero un bloque ```json, después cada posición posible del primer carácter.
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const sources = fenced ? [fenced[1], text] : [text];
   const close = open === "{" ? "}" : "]";
-  const start = text.indexOf(open);
-  const end = text.lastIndexOf(close);
-  if (start < 0 || end <= start) return null;
-  try {
-    return JSON.parse(text.slice(start, end + 1));
-  } catch {
-    return null;
+  for (const src of sources) {
+    const end = src.lastIndexOf(close);
+    let start = src.indexOf(open);
+    while (start >= 0 && start < end) {
+      try {
+        return JSON.parse(src.slice(start, end + 1));
+      } catch {
+        start = src.indexOf(open, start + 1);
+      }
+    }
   }
+  return null;
 }
 
 const OBJ = ["service", "product", "job_opportunity", "venue", "collaboration", "other"];
@@ -116,8 +142,9 @@ export async function aiInterpret(
     `Pedido: """${text.slice(0, 1500)}"""`;
   const msg = await callClaude(
     key,
-    { max_tokens: 400, system, messages: [{ role: "user", content: user }] },
-    9000,
+    { max_tokens: 600, system, messages: [{ role: "user", content: user }] },
+    12000,
+    "interpret",
   );
   const data = firstJson(textOf(msg), "{");
   if (!data || typeof data !== "object") return null;
@@ -176,8 +203,9 @@ export async function aiWebSuggestions(
   };
   const msg = await callClaude(
     key,
-    { max_tokens: 1200, system, messages: [{ role: "user", content: user }], tools: [tool] },
-    28000,
+    { max_tokens: 2000, system, messages: [{ role: "user", content: user }], tools: [tool] },
+    35000,
+    "web",
   );
   if (!msg) return null;
   // Links realmente vistos en los resultados: evita links inventados.
@@ -197,7 +225,10 @@ export async function aiWebSuggestions(
     }
   }
   const list = firstJson(textOf(msg), "[");
-  if (!Array.isArray(list)) return [];
+  if (!Array.isArray(list)) {
+    console.log("[deytra-ai] web sin lista", seen.size, "sitios vistos");
+    return [];
+  }
   const out: Suggestion[] = [];
   for (const s of list) {
     if (!s || typeof s.name !== "string" || typeof s.url !== "string") continue;
@@ -209,7 +240,7 @@ export async function aiWebSuggestions(
     } catch {
       continue;
     }
-    if (!seen.has(host)) continue;
+    if (!seen.has(host) && ![...seen].some((h) => host.endsWith(h) || h.endsWith(host))) continue;
     out.push({
       name: s.name.slice(0, 80),
       url: s.url.slice(0, 500),
