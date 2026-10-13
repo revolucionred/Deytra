@@ -1,5 +1,6 @@
 // Cuenta: mi perfil, lo que ofrezco, cerrar sesión y eliminar la cuenta.
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '/auth/supabase_auth/auth_util.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 import '/index.dart';
@@ -294,6 +295,18 @@ class _AccountPageWidgetState extends State<AccountPageWidget> {
     );
   }
 
+  /// Comparte lo que ofrezco por WhatsApp, con el link para encontrarme en Deytra.
+  Future<void> _share(Map<String, dynamic> o) async {
+    final title = (o['title'] ?? '').toString();
+    final city = (o['city'] ?? _city.text).toString().trim();
+    final text = 'Ahora también me encontrás en Deytra: $title'
+        '${city.isEmpty ? '' : ' en $city'}. Contá lo que necesitás y te conecta '
+        'con quien puede resolverlo. https://revolucionred.github.io/Deytra/';
+    await launchUrl(
+        Uri.parse('https://wa.me/?text=${Uri.encodeComponent(text)}'),
+        mode: LaunchMode.externalApplication);
+  }
+
   Widget _legalLink(String label, LegalDoc doc) => ListTile(
         contentPadding: EdgeInsets.zero,
         title: Text(label, style: DText.body(15)),
@@ -335,6 +348,12 @@ class _AccountPageWidgetState extends State<AccountPageWidget> {
           TextButton(
             onPressed: () => _toggle(o),
             child: Text(active ? 'Pausar' : 'Volver a mostrar',
+                style: DText.body(14,
+                    weight: FontWeight.w600, color: DColors.action)),
+          ),
+          TextButton(
+            onPressed: () => _share(o),
+            child: Text('Compartir',
                 style: DText.body(14,
                     weight: FontWeight.w600, color: DColors.action)),
           ),
