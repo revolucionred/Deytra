@@ -344,7 +344,7 @@ class _AccountPageWidgetState extends State<AccountPageWidget> {
         const SizedBox(height: 4),
         Text(details, style: DText.body(13, color: DColors.muted)),
         const SizedBox(height: 8),
-        Row(children: [
+        Wrap(children: [
           TextButton(
             onPressed: () => _toggle(o),
             child: Text(active ? 'Pausar' : 'Volver a mostrar',
