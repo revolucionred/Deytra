@@ -116,7 +116,8 @@ export function cors(origin: string | null) {
   const allowed =
     !origin ||
     /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ||
-    /^https:\/\/[a-z0-9-]+\.(flutterflow\.app|flutterflow\.io)$/.test(origin);
+    /^https:\/\/[a-z0-9-]+\.(flutterflow\.app|flutterflow\.io)$/.test(origin) ||
+    origin === "https://revolucionred.github.io";
   return {
     allowed,
     headers: {

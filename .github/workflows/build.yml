@@ -1,12 +1,21 @@
 # Compila Deytra en la nube cada vez que se sube un cambio.
-# Resultado: una versión web y un APK de Android para probar en el teléfono,
-# descargables desde la pestaña "Actions" del repositorio.
+# Resultado: la versión web publicada en GitHub Pages (para probar desde el iPhone)
+# y un APK de Android, descargable desde la pestaña "Actions".
 name: Compilar Deytra
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -32,7 +41,14 @@ jobs:
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: Versión web
-        run: flutter build web --release
+        run: flutter build web --release --base-href /Deytra/
+
+      - name: Página para rutas directas
+        run: cp build/web/index.html build/web/404.html
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web
 
       - name: APK de prueba para Android
         run: flutter build apk --release
@@ -42,7 +58,12 @@ jobs:
           name: deytra-android-apk
           path: build/app/outputs/flutter-apk/app-release.apk
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: deytra-web
-          path: build/web
+  publicar-web:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
