@@ -1,7 +1,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2.117.2";
-import { cors, reply, validTz, interpret } from "./interpretation.ts";
+import { cors, reply, validTz, interpret, norm } from "./interpretation.ts";
 import { geocode } from "./geo.ts";
-import { aiInterpret, aiWebSuggestions, type Suggestion } from "./ai.ts";
+import { aiConfig, aiInterpret, aiWebSuggestions, type Suggestion } from "./ai.ts";
 import {
   rankCapabilities,
   type Capability,
@@ -150,13 +150,14 @@ export async function handleRequest(
     if (parseText.length > 6000) return fail("text_too_long", 400, previousId);
     const intent = interpret(parseText, tz, body.locale_hint);
     // v9: la IA entiende el pedido; si no está disponible, quedan las reglas.
-    const anthropicKey = env("ANTHROPIC_API_KEY");
+    // Proveedor de IA elegido con los secretos (Anthropic por defecto, u OpenAI).
+    const aiCfg = aiConfig(env);
     const { data: catRows } = await userDb
       .from("categories")
       .select("slug,name_es")
       .eq("is_active", true);
     const ai = await aiInterpret(
-      anthropicKey,
+      aiCfg,
       parseText,
       owned.city ?? null,
       (catRows ?? []).map((r) => ({ slug: r.slug as string, name: r.name_es as string })),
@@ -310,8 +311,44 @@ export async function handleRequest(
         c.headers,
       );
     // Sugerencias de internet (negocios y cuentas reales) cuando la app tiene pocas opciones.
+    // Ahorro: los resultados se reutilizan durante 3 días para el mismo rubro y la misma zona,
+    // así dos personas que buscan lo mismo no pagan dos búsquedas.
     const suggest = async (internalCount: number): Promise<Suggestion[]> => {
-      if (internalCount >= 3 || !anthropicKey || intent.direction !== "seek") return [];
+      if (internalCount >= 3 || !aiCfg || intent.direction !== "seek") return [];
+      const nationwide =
+        !!intent.ships_nationwide || intent.location_importance === "indifferent";
+      const zone = nationwide ? "ar" : norm(intent.city ?? "ar");
+      const topic = slugs.length
+        ? [...slugs.slice(0, 3)].sort().join("+")
+        : norm(ai?.web_query ?? raw.slice(0, 80));
+      const web_key = `${topic}|${zone}`;
+      const save = (extra: Record<string, unknown>) =>
+        userDb
+          .from("intents")
+          .update({ metadata: { ...row.metadata, web_key, ...extra } })
+          .eq("id", id)
+          .eq("entity_id", entity);
+      if (serviceKey) {
+        const shared = factory(url, serviceKey, {
+          auth: { persistSession: false, autoRefreshToken: false },
+        });
+        const { data: hits } = await shared
+          .from("intents")
+          .select("metadata")
+          .eq("metadata->>web_key", web_key)
+          .eq("metadata->>web_used", "true")
+          .gte("created_at", new Date(Date.now() - 3 * 864e5).toISOString())
+          .neq("id", id)
+          .order("created_at", { ascending: false })
+          .limit(5);
+        for (const h of hits ?? []) {
+          const list = (h as { metadata?: { web_list?: unknown } }).metadata?.web_list;
+          if (Array.isArray(list) && list.length) {
+            await save({ web_cached: true, suggestions: list.length });
+            return list as Suggestion[];
+          }
+        }
+      }
       const since = new Date(Date.now() - 864e5).toISOString();
       const { count } = await userDb
         .from("intents")
@@ -321,20 +358,21 @@ export async function handleRequest(
         .eq("metadata->>web_used", "true");
       if ((count ?? 0) >= 15) return [];
       const list = await aiWebSuggestions(
-        anthropicKey,
+        aiCfg,
         raw,
         ai?.web_query ?? raw.slice(0, 120),
-        intent.location_importance === "indifferent" ? null : (intent.city ?? null),
+        nationwide ? null : (intent.city ?? null),
         intent.province ?? null,
-        !!intent.ships_nationwide || intent.location_importance === "indifferent",
+        nationwide,
       );
       // Solo cuenta para el límite diario si la búsqueda realmente se hizo.
       if (list === null) return [];
-      await userDb
-        .from("intents")
-        .update({ metadata: { ...row.metadata, web_used: true, suggestions: list.length } })
-        .eq("id", id)
-        .eq("entity_id", entity);
+      await save({
+        web_used: true,
+        web_provider: aiCfg.provider,
+        suggestions: list.length,
+        web_list: list,
+      });
       return list;
     };
     if (intent.needs_clarification)

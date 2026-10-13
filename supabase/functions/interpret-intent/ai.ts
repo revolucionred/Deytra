@@ -1,9 +1,12 @@
 // IA de Deytra: interpreta la necesidad en lenguaje natural y, cuando hace falta,
 // sugiere negocios o cuentas reales encontradas en internet (con su link).
-// La clave vive solo en el backend (secreto ANTHROPIC_API_KEY de Supabase).
-
-const API = "https://api.anthropic.com/v1/messages";
-const MODEL = "claude-haiku-5-5";
+// Funciona con Anthropic (Claude) u OpenAI. Las claves viven solo en el backend
+// (secretos de Supabase). Para cambiar de proveedor alcanza con el secreto AI_PROVIDER.
+//
+//   AI_PROVIDER        "anthropic" (por defecto) u "openai"
+//   ANTHROPIC_API_KEY  clave de Anthropic
+//   OPENAI_API_KEY     clave de OpenAI
+//   AI_MODEL           opcional, para forzar un modelo puntual
 
 export type AiIntent = {
   direction?: "seek" | "offer";
@@ -23,75 +26,233 @@ export type Suggestion = {
   scope: "local" | "nacional";
 };
 
+export type AiConfig = { provider: "anthropic" | "openai"; key: string; model: string };
+
+const DEFAULT_MODEL = { anthropic: "claude-haiku-5-5", openai: "gpt-6-luna" } as const;
+
 /** Acepta el secreto aunque se haya pegado con texto de más: toma solo la clave. */
 export function cleanKey(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
-  const hit = raw.match(/sk-ant-[A-Za-z0-9_\-]{20,}/);
+  const hit = raw.match(/sk-(?:ant-|proj-|svcacct-)?[A-Za-z0-9_\-]{20,}/);
   const key = (hit ? hit[0] : raw).trim();
   return /^[\x21-\x7e]+$/.test(key) ? key : undefined;
 }
 
-async function post(key: string, body: Record<string, unknown>, timeoutMs: number) {
-  return await fetch(API, {
+/** Elige el proveedor según los secretos cargados. Devuelve null si no hay ninguna clave. */
+export function aiConfig(env: (k: string) => string | undefined): AiConfig | null {
+  const anthropic = cleanKey(env("ANTHROPIC_API_KEY"));
+  const openai = cleanKey(env("OPENAI_API_KEY"));
+  const wanted = (env("AI_PROVIDER") ?? "").trim().toLowerCase();
+  const custom = (env("AI_MODEL") ?? "").trim();
+  let provider: AiConfig["provider"] | null = null;
+  if (wanted === "openai" && openai) provider = "openai";
+  else if (wanted === "anthropic" && anthropic) provider = "anthropic";
+  else if (anthropic) provider = "anthropic";
+  else if (openai) provider = "openai";
+  if (!provider) return null;
+  return {
+    provider,
+    key: provider === "openai" ? openai! : anthropic!,
+    model: /^[a-z0-9.\-]{3,60}$/i.test(custom) ? custom : DEFAULT_MODEL[provider],
+  };
+}
+
+/** Respuesta común a los dos proveedores. */
+type AiReply = { text: string; seen: Set<string> };
+
+function hostOf(url: unknown): string | null {
+  try {
+    return typeof url === "string" ? new URL(url).hostname.replace(/^www\./, "") : null;
+  } catch {
+    return null;
+  }
+}
+
+async function post(url: string, headers: Record<string, string>, body: unknown, ms: number) {
+  return await fetch(url, {
     method: "POST",
-    headers: {
-      "x-api-key": key,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ model: MODEL, ...body }),
-    signal: AbortSignal.timeout(timeoutMs),
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(Math.max(1000, ms)),
   });
 }
 
-async function callClaude(
-  rawKey: string,
-  body: Record<string, unknown>,
-  timeoutMs: number,
-  label: string,
-): Promise<any | null> {
-  const key = cleanKey(rawKey);
-  if (!key) {
-    console.error("[deytra-ai] clave con formato inválido");
-    return null;
-  }
-  const started = Date.now();
+async function errorKind(res: Response) {
   try {
-    // Sin razonamiento extendido: respuestas cortas y rápidas, sin gastar la salida pensando.
-    let res = await post(key, { ...body, thinking: { type: "disabled" } }, timeoutMs);
-    if (res.status === 400) {
-      // Si el modelo no acepta desactivarlo, se reintenta igual pero con más margen de salida.
-      const max = Number(body.max_tokens ?? 1000);
-      res = await post(
-        key,
-        { ...body, max_tokens: Math.max(max * 4, 4000) },
-        Math.max(1000, timeoutMs - (Date.now() - started)),
-      );
-    }
-    if (!res.ok) {
-      let kind = "";
-      try {
-        kind = String((await res.json())?.error?.type ?? "").slice(0, 60);
-      } catch { /* sin cuerpo */ }
-      console.error("[deytra-ai]", label, "status", res.status, kind);
-      return null;
-    }
-    const msg = await res.json();
-    const types = (msg?.content ?? []).map((b: any) => b?.type).join(",");
-    console.log("[deytra-ai]", label, "ok", msg?.stop_reason, types, `${Date.now() - started}ms`);
-    return msg;
-  } catch (e) {
-    // Nunca se registra el mensaje completo: podría contener la clave.
-    console.error("[deytra-ai]", label, "request failed", (e as Error)?.name ?? "error");
-    return null;
+    const b = await res.json();
+    return String(b?.error?.type ?? b?.error?.code ?? "").slice(0, 60);
+  } catch {
+    return "";
   }
 }
 
-function textOf(msg: any): string {
-  return (msg?.content ?? [])
-    .filter((b: any) => b?.type === "text" && typeof b.text === "string")
-    .map((b: any) => b.text)
-    .join("\n");
+async function askAnthropic(
+  cfg: AiConfig,
+  system: string,
+  user: string,
+  maxTokens: number,
+  ms: number,
+  search: { city: string | null; region: string | null } | null,
+): Promise<AiReply | null> {
+  const started = Date.now();
+  const headers = { "x-api-key": cfg.key, "anthropic-version": "2023-06-01" };
+  const base: Record<string, unknown> = {
+    model: cfg.model,
+    max_tokens: maxTokens,
+    system,
+    messages: [{ role: "user", content: user }],
+  };
+  if (search) {
+    base.tools = [{
+      type: "web_search_20250305",
+      name: "web_search",
+      // Una sola búsqueda por pedido: es lo que más cuesta.
+      max_uses: 1,
+      user_location: {
+        type: "approximate",
+        country: "AR",
+        timezone: "America/Argentina/Buenos_Aires",
+        ...(search.city ? { city: search.city } : {}),
+        ...(search.region ? { region: search.region } : {}),
+      },
+    }];
+  }
+  const url = "https://api.anthropic.com/v1/messages";
+  // Sin razonamiento extendido: respuestas cortas, rápidas y baratas.
+  let res = await post(url, headers, { ...base, thinking: { type: "disabled" } }, ms);
+  if (res.status === 400) {
+    res = await post(
+      url,
+      headers,
+      { ...base, max_tokens: Math.max(maxTokens * 4, 4000) },
+      ms - (Date.now() - started),
+    );
+  }
+  if (!res.ok) {
+    console.error("[deytra-ai] anthropic status", res.status, await errorKind(res));
+    return null;
+  }
+  const msg = await res.json();
+  const seen = new Set<string>();
+  const texts: string[] = [];
+  for (const block of msg?.content ?? []) {
+    if (block?.type === "text" && typeof block.text === "string") texts.push(block.text);
+    if (block?.type === "web_search_tool_result" && Array.isArray(block.content)) {
+      for (const r of block.content) {
+        const h = hostOf(r?.url);
+        if (h) seen.add(h);
+      }
+    }
+    for (const c of block?.citations ?? []) {
+      const h = hostOf(c?.url);
+      if (h) seen.add(h);
+    }
+  }
+  console.log(
+    "[deytra-ai] anthropic ok",
+    msg?.stop_reason,
+    `${Date.now() - started}ms`,
+    `in=${msg?.usage?.input_tokens ?? "?"} out=${msg?.usage?.output_tokens ?? "?"}`,
+  );
+  return { text: texts.join("\n"), seen };
+}
+
+async function askOpenAI(
+  cfg: AiConfig,
+  system: string,
+  user: string,
+  maxTokens: number,
+  ms: number,
+  search: { city: string | null; region: string | null } | null,
+): Promise<AiReply | null> {
+  const started = Date.now();
+  const headers = { authorization: `Bearer ${cfg.key}` };
+  const url = "https://api.openai.com/v1/responses";
+  const base: Record<string, unknown> = {
+    model: cfg.model,
+    instructions: system,
+    input: user,
+    max_output_tokens: maxTokens,
+    store: false,
+  };
+  if (search) {
+    base.tools = [{
+      type: "web_search",
+      search_context_size: "low",
+      user_location: {
+        type: "approximate",
+        country: "AR",
+        timezone: "America/Argentina/Buenos_Aires",
+        ...(search.city ? { city: search.city } : {}),
+        ...(search.region ? { region: search.region } : {}),
+      },
+    }];
+  }
+  // Intento con los ajustes de ahorro; si el modelo no acepta alguno, se reintenta sin ellos.
+  let res = await post(
+    url,
+    headers,
+    { ...base, reasoning: { effort: "none" }, ...(search ? { max_tool_calls: 1 } : {}) },
+    ms,
+  );
+  if (res.status === 400) {
+    res = await post(
+      url,
+      headers,
+      { ...base, max_output_tokens: Math.max(maxTokens * 4, 4000) },
+      ms - (Date.now() - started),
+    );
+  }
+  if (!res.ok) {
+    console.error("[deytra-ai] openai status", res.status, await errorKind(res));
+    return null;
+  }
+  const out = await res.json();
+  const seen = new Set<string>();
+  const texts: string[] = [];
+  for (const item of out?.output ?? []) {
+    if (item?.type === "message") {
+      for (const part of item.content ?? []) {
+        if (part?.type === "output_text" && typeof part.text === "string") texts.push(part.text);
+        for (const a of part?.annotations ?? []) {
+          const h = hostOf(a?.url);
+          if (h) seen.add(h);
+        }
+      }
+    }
+    if (item?.type === "web_search_call") {
+      for (const s of item?.action?.sources ?? []) {
+        const h = hostOf(s?.url);
+        if (h) seen.add(h);
+      }
+    }
+  }
+  console.log(
+    "[deytra-ai] openai ok",
+    out?.status,
+    `${Date.now() - started}ms`,
+    `in=${out?.usage?.input_tokens ?? "?"} out=${out?.usage?.output_tokens ?? "?"}`,
+  );
+  return { text: texts.join("\n"), seen };
+}
+
+async function ask(
+  cfg: AiConfig,
+  system: string,
+  user: string,
+  maxTokens: number,
+  ms: number,
+  search: { city: string | null; region: string | null } | null = null,
+): Promise<AiReply | null> {
+  try {
+    return cfg.provider === "openai"
+      ? await askOpenAI(cfg, system, user, maxTokens, ms, search)
+      : await askAnthropic(cfg, system, user, maxTokens, ms, search);
+  } catch (e) {
+    // Nunca se registra el mensaje completo: podría contener la clave.
+    console.error("[deytra-ai]", cfg.provider, "request failed", (e as Error)?.name ?? "error");
+    return null;
+  }
 }
 
 function firstJson(text: string, open: "{" | "["): any | null {
@@ -118,12 +279,12 @@ const MOD = ["presencial", "remoto", "hibrido", "no_aplica"];
 
 /** Entiende lo que la persona pide. Devuelve null si la IA no está disponible. */
 export async function aiInterpret(
-  key: string | undefined,
+  cfg: AiConfig | null,
   text: string,
   profileCity: string | null,
   categories: { slug: string; name: string }[],
 ): Promise<AiIntent | null> {
-  if (!key) return null;
+  if (!cfg) return null;
   const catalog = categories.map((c) => `${c.slug}: ${c.name}`).join("\n");
   const system =
     "Sos el motor de comprensión de Deytra, una app argentina que conecta personas con quien puede resolver lo que necesitan. " +
@@ -140,13 +301,8 @@ export async function aiInterpret(
     `Catálogo de rubros:\n${catalog}\n\n` +
     `Ciudad del perfil de la persona: ${profileCity ?? "desconocida"}\n\n` +
     `Pedido: """${text.slice(0, 1500)}"""`;
-  const msg = await callClaude(
-    key,
-    { max_tokens: 600, system, messages: [{ role: "user", content: user }] },
-    12000,
-    "interpret",
-  );
-  const data = firstJson(textOf(msg), "{");
+  const reply = await ask(cfg, system, user, 600, 12000);
+  const data = reply ? firstJson(reply.text, "{") : null;
   if (!data || typeof data !== "object") return null;
   const valid = new Set(categories.map((c) => c.slug));
   const out: AiIntent = {};
@@ -166,69 +322,43 @@ export async function aiInterpret(
   return out;
 }
 
-/** Busca en internet negocios o cuentas reales. Solo devuelve links que aparecieron en la búsqueda. */
+/**
+ * Busca en internet negocios o cuentas reales. Solo devuelve links que aparecieron en la búsqueda.
+ * Devuelve null si la búsqueda no se pudo hacer (para no contarla en el límite diario).
+ */
 export async function aiWebSuggestions(
-  key: string | undefined,
+  cfg: AiConfig | null,
   need: string,
   query: string,
   city: string | null,
   province: string | null,
   nationwide: boolean,
 ): Promise<Suggestion[] | null> {
-  if (!key || !query) return null;
+  if (!cfg || !query) return null;
   const where = nationwide
     ? "con envío o atención a todo el país"
     : city
       ? `en ${city}${province ? `, ${province}` : ""} o alrededores`
       : "en Argentina";
   const system =
-    "Sos la guía de Deytra. Buscá en internet opciones reales para resolver la necesidad de la persona y respondé SOLO un arreglo JSON (sin texto extra) de hasta 4 objetos con: " +
+    "Sos la guía de Deytra. Hacé UNA búsqueda en internet para encontrar opciones reales que resuelvan la necesidad de la persona y respondé SOLO un arreglo JSON (sin texto extra) de hasta 4 objetos con: " +
     '"name" (nombre del negocio, tienda, profesional o cuenta), "url" (el link exacto que encontraste en los resultados: sitio web, tienda online o perfil de Instagram), ' +
     '"description" (qué ofrece y por qué sirve, máximo 140 caracteres, en español rioplatense), ' +
     '"kind" (tienda, negocio, instagram o profesional), "scope" (local o nacional). ' +
     "Priorizá opciones argentinas, con datos verificables y vigentes. No incluyas directorios genéricos, notas periodísticas ni marketplaces enteros como opción. " +
     "Si no encontrás nada confiable, devolvé [].";
   const user = `Necesidad: """${need.slice(0, 600)}"""\nBuscá: ${query} ${where}`;
-  const tool: Record<string, unknown> = {
-    type: "web_search_20250305",
-    name: "web_search",
-    max_uses: 2,
-    user_location: {
-      type: "approximate",
-      country: "AR",
-      timezone: "America/Argentina/Buenos_Aires",
-      ...(city && !nationwide ? { city } : {}),
-      ...(province && !nationwide ? { region: province } : {}),
-    },
-  };
-  const msg = await callClaude(
-    key,
-    { max_tokens: 2000, system, messages: [{ role: "user", content: user }], tools: [tool] },
-    35000,
-    "web",
-  );
-  if (!msg) return null;
-  // Links realmente vistos en los resultados: evita links inventados.
-  const seen = new Set<string>();
-  for (const block of msg.content ?? []) {
-    if (block?.type === "web_search_tool_result" && Array.isArray(block.content)) {
-      for (const r of block.content) {
-        try {
-          if (r?.url) seen.add(new URL(r.url).hostname.replace(/^www\./, ""));
-        } catch { /* url inválida */ }
-      }
-    }
-    for (const c of block?.citations ?? []) {
-      try {
-        if (c?.url) seen.add(new URL(c.url).hostname.replace(/^www\./, ""));
-      } catch { /* url inválida */ }
-    }
-  }
-  const list = firstJson(textOf(msg), "[");
+  const reply = await ask(cfg, system, user, 2000, 35000, {
+    city: nationwide ? null : city,
+    region: nationwide ? null : province,
+  });
+  if (!reply) return null;
+  const list = firstJson(reply.text, "[");
   if (!Array.isArray(list)) {
-    console.log("[deytra-ai] web sin lista", seen.size, "sitios vistos");
+    console.log("[deytra-ai] web sin lista", reply.seen.size, "sitios vistos");
     return [];
   }
+  const seen = reply.seen;
   const out: Suggestion[] = [];
   for (const s of list) {
     if (!s || typeof s.name !== "string" || typeof s.url !== "string") continue;
@@ -240,6 +370,7 @@ export async function aiWebSuggestions(
     } catch {
       continue;
     }
+    // Links realmente vistos en los resultados: evita links inventados.
     if (!seen.has(host) && ![...seen].some((h) => host.endsWith(h) || h.endsWith(host))) continue;
     out.push({
       name: s.name.slice(0, 80),
