@@ -1,0 +1,17 @@
+{
+  "name": "Deytra",
+  "short_name": "Deytra",
+  "description": "Contá lo que necesitás con tus palabras y encontrá quién puede ayudarte, cerca o a distancia.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F8F6F2",
+  "theme_color": "#0D1117",
+  "lang": "es-AR",
+  "icons": [
+    { "src": "icons/Icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/Icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/Icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

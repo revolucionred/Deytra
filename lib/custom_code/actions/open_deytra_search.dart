@@ -968,8 +968,31 @@ class _DeytraSearchDialogState extends State<_DeytraSearchDialog> {
                 style: _type(14, weight: FontWeight.w700)),
           ),
         ),
+        const SizedBox(height: 4),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: () => _invite(s),
+            icon: const Icon(Icons.person_add_alt_1_outlined,
+                size: 18, color: _burnt),
+            label: Text('Invitarlo a Deytra',
+                style: _type(13, weight: FontWeight.w600, color: _burnt)),
+          ),
+        ),
       ]),
     );
+  }
+
+  /// Abre WhatsApp con una invitación lista para reenviar al negocio sugerido.
+  Future<void> _invite(Map<String, dynamic> s) async {
+    final name = _text(s['name']);
+    final text = 'Hola${name.isEmpty ? '' : ' $name'}. Te encontré en internet '
+        'buscando algo que ofrecés y me gustaría que estés en Deytra, una app '
+        'donde la gente de la zona cuenta lo que necesita y encuentra quién se lo '
+        'resuelve. Sumarte es gratis: https://revolucionred.github.io/Deytra/';
+    await launchUrl(
+        Uri.parse('https://wa.me/?text=${Uri.encodeComponent(text)}'),
+        mode: LaunchMode.externalApplication);
   }
 
   @override

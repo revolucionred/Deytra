@@ -1,6 +1,7 @@
 // Solicitudes de contacto: las que recibí y las que envié.
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'chat_page.dart';
 import 'deytra_data.dart';
 import 'deytra_ui.dart';
 
@@ -58,13 +59,30 @@ class _ConnectionsPageWidgetState extends State<ConnectionsPageWidget> {
       await DeytraData.respondConnection(id, accept);
       if (!mounted) return;
       showDMessage(context,
-          accept ? 'Aceptaste. Ya pueden hablar.' : 'Solicitud rechazada.');
+          accept
+              ? 'Aceptaste. Ya pueden hablar por el chat.'
+              : 'Solicitud rechazada.');
       await _load();
     } catch (e) {
       if (mounted) showDMessage(context, DeytraData.friendlyError(e), error: true);
     } finally {
       if (mounted) setState(() => _busy.remove(id));
     }
+  }
+
+  Future<void> _openChat(Map<String, dynamic> c) async {
+    final me = (c['my_entity_id'] ?? _myEntityId)?.toString();
+    if (me == null) return;
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => ChatPageWidget(
+        connectionId: c['id'].toString(),
+        myEntityId: me,
+        otherName: (c['other_name'] ?? 'Conversación').toString(),
+        otherWhatsapp: (c['other_whatsapp'] ?? '').toString(),
+        topic: (c['capability_title'] ?? '').toString(),
+      ),
+    ));
+    if (mounted) _load();
   }
 
   Future<void> _cancel(Map<String, dynamic> c) async {
@@ -155,6 +173,11 @@ class _ConnectionsPageWidgetState extends State<ConnectionsPageWidget> {
     final pendingReceived = _items
         .where((c) => c['i_am_requester'] != true && c['status'] == 'pending')
         .length;
+    int unreadIn(bool received) => _items
+        .where((c) => (c['i_am_requester'] != true) == received)
+        .fold(0, (n, c) => n + ((c['unread'] as num?)?.toInt() ?? 0));
+    final receivedBadge = pendingReceived + unreadIn(true);
+    final sentBadge = unreadIn(false);
     return Scaffold(
       backgroundColor: DColors.cream,
       appBar: const DHeader(title: 'Conexiones'),
@@ -167,15 +190,15 @@ class _ConnectionsPageWidgetState extends State<ConnectionsPageWidget> {
             children: [
               Row(children: [
                 DChip(
-                  label: pendingReceived > 0
-                      ? 'Recibidas · $pendingReceived'
+                  label: receivedBadge > 0
+                      ? 'Recibidas · $receivedBadge'
                       : 'Recibidas',
                   selected: _showReceived,
                   onTap: () => setState(() => _showReceived = true),
                 ),
                 const SizedBox(width: 8),
                 DChip(
-                  label: 'Enviadas',
+                  label: sentBadge > 0 ? 'Enviadas · $sentBadge' : 'Enviadas',
                   selected: !_showReceived,
                   onTap: () => setState(() => _showReceived = false),
                 ),
@@ -226,6 +249,9 @@ class _ConnectionsPageWidgetState extends State<ConnectionsPageWidget> {
     final offer = (c['capability_title'] ?? '').toString();
     final intro = (c['intro_message'] ?? '').toString();
     final instagram = (c['other_instagram_url'] ?? '').toString();
+    final whatsapp = (c['other_whatsapp'] ?? '').toString();
+    final lastMessage = (c['last_message'] ?? '').toString();
+    final unread = (c['unread'] as num?)?.toInt() ?? 0;
     final (statusText, statusColor) = switch (status) {
       'accepted' => ('Aceptada', DColors.success),
       'rejected' => ('No aceptada', DColors.muted),
@@ -279,22 +305,44 @@ class _ConnectionsPageWidgetState extends State<ConnectionsPageWidget> {
           const SizedBox(height: 4),
           Text(intro, style: DText.body(14)),
         ],
-        if (status == 'accepted' && instagram.isNotEmpty) ...[
+        if (status == 'accepted') ...[
+          if (lastMessage.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text(
+                '${c['last_from_me'] == true ? 'Vos: ' : ''}$lastMessage',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: DText.body(14,
+                    weight: unread > 0 ? FontWeight.w700 : FontWeight.w400,
+                    color: unread > 0 ? DColors.ink : DColors.muted)),
+          ],
           const SizedBox(height: 14),
           DButton(
-            label: 'Escribirle por Instagram',
-            secondary: true,
-            onPressed: () => launchUrl(Uri.parse(instagram),
-                mode: LaunchMode.externalApplication),
+            label: unread > 0
+                ? 'Abrir chat · $unread ${unread == 1 ? 'mensaje nuevo' : 'mensajes nuevos'}'
+                : lastMessage.isEmpty
+                    ? 'Escribirle por el chat'
+                    : 'Abrir chat',
+            onPressed: () => _openChat(c),
           ),
-        ],
-        if (status == 'accepted' && instagram.isEmpty) ...[
-          const SizedBox(height: 12),
-          Text(
-              received
-                  ? 'Para que te escriban fácil, sumá tu Instagram en Cuenta.'
-                  : 'Esta persona todavía no cargó un medio de contacto.',
-              style: DText.body(13, color: DColors.muted)),
+          if (whatsapp.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            DButton(
+              label: 'Escribirle por WhatsApp',
+              secondary: true,
+              onPressed: () => launchUrl(DeytraData.whatsappUri(whatsapp),
+                  mode: LaunchMode.externalApplication),
+            ),
+          ],
+          if (instagram.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            DButton(
+              label: 'Ver su Instagram',
+              secondary: true,
+              onPressed: () => launchUrl(Uri.parse(instagram),
+                  mode: LaunchMode.externalApplication),
+            ),
+          ],
         ],
         if (received && status == 'pending') ...[
           const SizedBox(height: 16),

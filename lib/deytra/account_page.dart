@@ -5,6 +5,7 @@ import '/flutter_flow/flutter_flow_util.dart';
 import '/index.dart';
 import 'deytra_data.dart';
 import 'deytra_ui.dart';
+import 'legal_page.dart';
 import 'offer_page.dart';
 
 class AccountPageWidget extends StatefulWidget {
@@ -20,6 +21,7 @@ class _AccountPageWidgetState extends State<AccountPageWidget> {
   final _city = TextEditingController();
   final _bio = TextEditingController();
   final _instagram = TextEditingController();
+  final _whatsapp = TextEditingController();
   Map<String, dynamic>? _entity;
   List<Map<String, dynamic>> _offers = [];
   bool _loading = true;
@@ -39,6 +41,7 @@ class _AccountPageWidgetState extends State<AccountPageWidget> {
     _city.dispose();
     _bio.dispose();
     _instagram.dispose();
+    _whatsapp.dispose();
     super.dispose();
   }
 
@@ -62,6 +65,8 @@ class _AccountPageWidgetState extends State<AccountPageWidget> {
         _instagram.text = (entity?['instagram_url'] ?? '')
             .toString()
             .replaceFirst(RegExp(r'^https?://(www\.)?instagram\.com/'), '@');
+        final wa = (entity?['whatsapp'] ?? '').toString();
+        _whatsapp.text = wa.isEmpty ? '' : '+$wa';
         _loading = false;
       });
     } catch (e) {
@@ -79,6 +84,13 @@ class _AccountPageWidgetState extends State<AccountPageWidget> {
       showDMessage(context, 'Tu nombre no puede quedar vacío.', error: true);
       return;
     }
+    if (_whatsapp.text.trim().isNotEmpty &&
+        DeytraData.normalizeWhatsapp(_whatsapp.text) == null) {
+      showDMessage(context,
+          'Revisá el WhatsApp: escribilo con código de área, por ejemplo 341 555 1234.',
+          error: true);
+      return;
+    }
     setState(() => _saving = true);
     try {
       await DeytraData.updateProfile(
@@ -87,6 +99,7 @@ class _AccountPageWidgetState extends State<AccountPageWidget> {
         city: _city.text,
         description: _bio.text,
         instagramUrl: _instagram.text,
+        whatsapp: _whatsapp.text,
       );
       if (mounted) showDMessage(context, 'Perfil actualizado.');
     } catch (e) {
@@ -242,14 +255,29 @@ class _AccountPageWidgetState extends State<AccountPageWidget> {
                         hint: '@tuusuario',
                         maxLength: 80,
                         helper:
-                            'Solo lo ve quien aceptaste como conexión, para que pueda escribirte.',
+                            'Solo lo ve quien aceptaste como conexión.',
+                      ),
+                      const SizedBox(height: 16),
+                      DField(
+                        controller: _whatsapp,
+                        label: 'WhatsApp (opcional)',
+                        hint: 'Ej.: 341 555 1234',
+                        maxLength: 24,
+                        keyboardType: TextInputType.phone,
+                        helper:
+                            'Solo lo ve quien aceptaste como conexión. Si no lo cargás, igual pueden hablar por el chat de Deytra.',
                       ),
                       const SizedBox(height: 20),
                       DButton(
                           label: 'Guardar perfil',
                           busy: _saving,
                           onPressed: _saveProfile),
-                      const SizedBox(height: 40),
+                      const SizedBox(height: 32),
+                      Text('LEGALES', style: DText.label()),
+                      const SizedBox(height: 4),
+                      _legalLink('Política de privacidad', LegalDoc.privacy),
+                      _legalLink('Términos y condiciones', LegalDoc.terms),
+                      const SizedBox(height: 24),
                       DButton(
                           label: 'Cerrar sesión',
                           secondary: true,
@@ -265,6 +293,14 @@ class _AccountPageWidgetState extends State<AccountPageWidget> {
       ),
     );
   }
+
+  Widget _legalLink(String label, LegalDoc doc) => ListTile(
+        contentPadding: EdgeInsets.zero,
+        title: Text(label, style: DText.body(15)),
+        trailing: const DIcon('arrow-right', size: 18),
+        onTap: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => LegalPageWidget(doc: doc))),
+      );
 
   Widget _offerCard(Map<String, dynamic> o) {
     final active = o['is_active'] == true;

@@ -12,13 +12,16 @@ import '/flutter_flow/flutter_flow_theme.dart';
 import 'flutter_flow/flutter_flow_util.dart';
 import 'flutter_flow/nav/nav.dart';
 import 'index.dart';
+import '/deytra/password_reset.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   GoRouter.optionURLReflectsImperativeAPIs = true;
   usePathUrlStrategy();
 
+  DeytraRecovery.checkLaunchUrl();
   await SupaFlow.initialize();
+  DeytraRecovery.listen();
 
   await FlutterFlowTheme.initialize();
 

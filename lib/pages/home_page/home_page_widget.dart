@@ -1,3 +1,4 @@
+import 'dart:async';
 import '/auth/supabase_auth/auth_util.dart';
 import '/backend/supabase/supabase.dart';
 import '/flutter_flow/ff_builtin_enums.dart';
@@ -21,6 +22,8 @@ import '/deytra/deytra_ui.dart';
 import '/deytra/offer_page.dart';
 import '/deytra/connections_page.dart';
 import '/deytra/account_page.dart';
+import '/deytra/deytra_data.dart';
+import '/deytra/password_reset.dart';
 export 'home_page_model.dart';
 
 class HomePageWidget extends StatefulWidget {
@@ -41,10 +44,34 @@ class _HomePageWidgetState extends State<HomePageWidget>
 
   final animationsMap = <String, AnimationInfo>{};
 
+  // Avisos: solicitudes pendientes y mensajes sin leer.
+  int _badge = 0;
+  Timer? _badgeTimer;
+
+  bool _recovering = false;
+  Future<void> _maybeRecover() async {
+    if (!mounted || _recovering || !DeytraRecovery.pending.value) return;
+    _recovering = true;
+    await showNewPassword(context);
+    _recovering = false;
+  }
+
+  Future<void> _loadBadges() async {
+    final b = await DeytraData.badges();
+    if (mounted && b.requests + b.unread != _badge) {
+      setState(() => _badge = b.requests + b.unread);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     _model = createModel(context, () => HomePageModel());
+    _loadBadges();
+    DeytraRecovery.pending.addListener(_maybeRecover);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeRecover());
+    _badgeTimer =
+        Timer.periodic(const Duration(seconds: 45), (_) => _loadBadges());
 
     // On page load action.
     SchedulerBinding.instance.addPostFrameCallback((_) async {
@@ -163,6 +190,8 @@ class _HomePageWidgetState extends State<HomePageWidget>
 
   @override
   void dispose() {
+    _badgeTimer?.cancel();
+    DeytraRecovery.pending.removeListener(_maybeRecover);
     _model.dispose();
 
     super.dispose();
@@ -226,7 +255,8 @@ class _HomePageWidgetState extends State<HomePageWidget>
                   _headerAction(context, 'opportunity', 'Ofrecer algo',
                       const OfferPageWidget()),
                   _headerAction(context, 'connect', 'Conexiones',
-                      const ConnectionsPageWidget()),
+                      const ConnectionsPageWidget(),
+                      badge: _badge),
                   _headerAction(context, 'people', 'Tu cuenta',
                       const AccountPageWidget()),
                   const SizedBox(width: 8),
@@ -581,12 +611,36 @@ class _HomePageWidgetState extends State<HomePageWidget>
   ];
 
   Widget _headerAction(
-          BuildContext context, String icon, String label, Widget page) =>
+          BuildContext context, String icon, String label, Widget page,
+          {int badge = 0}) =>
       IconButton(
-        tooltip: label,
-        onPressed: () => Navigator.of(context)
-            .push(MaterialPageRoute(builder: (_) => page)),
-        icon: DIcon(icon, size: 24, color: Colors.white),
+        tooltip: badge > 0 ? '$label ($badge nuevas)' : label,
+        onPressed: () async {
+          await Navigator.of(context)
+              .push(MaterialPageRoute(builder: (_) => page));
+          _loadBadges();
+        },
+        icon: Stack(clipBehavior: Clip.none, children: [
+          DIcon(icon, size: 24, color: Colors.white),
+          if (badge > 0)
+            Positioned(
+              right: -7,
+              top: -5,
+              child: Container(
+                constraints: const BoxConstraints(minWidth: 18),
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                decoration: BoxDecoration(
+                  color: DColors.orange,
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: DColors.ink, width: 1.5),
+                ),
+                child: Text(badge > 9 ? '9+' : '$badge',
+                    textAlign: TextAlign.center,
+                    style: DText.body(10,
+                        weight: FontWeight.w800, color: DColors.ink, height: 1.2)),
+              ),
+            ),
+        ]),
       );
 
   Widget _ideaChip(BuildContext context, String label, String text) =>

@@ -33,17 +33,23 @@ class DeytraData {
     String? city,
     String? description,
     String? instagramUrl,
+    String? whatsapp,
   }) async {
-    await _db
-        .from('entities')
-        .update({
-          'name': name.trim(),
-          'city': _clean(city),
-          'description': _clean(description),
-          'instagram_url': _instagram(instagramUrl),
-        })
-        .eq('id', entityId)
-        .timeout(_timeout);
+    final data = <String, dynamic>{
+      'name': name.trim(),
+      'city': _clean(city),
+      'description': _clean(description),
+      'instagram_url': _instagram(instagramUrl),
+      'whatsapp': normalizeWhatsapp(whatsapp),
+    };
+    try {
+      await _db.from('entities').update(data).eq('id', entityId).timeout(_timeout);
+    } on PostgrestException catch (e) {
+      // Si la base todavía no tiene la columna de WhatsApp, se guarda el resto igual.
+      if (!e.message.contains('whatsapp')) rethrow;
+      data.remove('whatsapp');
+      await _db.from('entities').update(data).eq('id', entityId).timeout(_timeout);
+    }
     final id = uid;
     if (id != null) {
       await _db
@@ -160,6 +166,61 @@ class DeytraData {
   static Future<void> cancelConnection(String id) =>
       _db.from('connections').delete().eq('id', id).timeout(_timeout);
 
+  // ---------- Chat ----------
+  static Future<List<Map<String, dynamic>>> messages(String connectionId) async {
+    final rows = await _db
+        .from('messages')
+        .select('id,sender_entity_id,body,created_at,read_at')
+        .eq('connection_id', connectionId)
+        .order('created_at')
+        .limit(500)
+        .timeout(_timeout);
+    return (rows as List).map((e) => Map<String, dynamic>.from(e)).toList();
+  }
+
+  /// Mensajes en vivo de una conversación (los permisos los controla la base).
+  static Stream<List<Map<String, dynamic>>> messageStream(String connectionId) =>
+      _db
+          .from('messages')
+          .stream(primaryKey: ['id'])
+          .eq('connection_id', connectionId)
+          .order('created_at')
+          .map((rows) => rows.map((e) => Map<String, dynamic>.from(e)).toList());
+
+  static Future<void> sendMessage({
+    required String connectionId,
+    required String senderEntityId,
+    required String body,
+  }) =>
+      _db.from('messages').insert({
+        'connection_id': connectionId,
+        'sender_entity_id': senderEntityId,
+        'body': body.trim(),
+      }).timeout(_timeout);
+
+  static Future<void> markRead(String connectionId) async {
+    try {
+      await _db.rpc('mark_messages_read',
+          params: {'p_connection_id': connectionId}).timeout(_timeout);
+    } catch (_) {
+      // Marcar como leído nunca debe interrumpir la conversación.
+    }
+  }
+
+  /// Solicitudes pendientes y mensajes sin leer, para los avisos del inicio.
+  static Future<({int requests, int unread})> badges() async {
+    try {
+      final rows = await _db.rpc('my_badges').timeout(_timeout);
+      final row = rows is List && rows.isNotEmpty ? rows.first as Map : const {};
+      return (
+        requests: (row['pending_requests'] as num?)?.toInt() ?? 0,
+        unread: (row['unread_messages'] as num?)?.toInt() ?? 0,
+      );
+    } catch (_) {
+      return (requests: 0, unread: 0);
+    }
+  }
+
   // ---------- Seguridad ----------
   static Future<void> block(
           {required String myEntityId, required String otherEntityId}) =>
@@ -199,6 +260,25 @@ class DeytraData {
     final t = s?.trim() ?? '';
     return t.isEmpty ? null : t;
   }
+
+  /// Deja solo números con código de país (Argentina por defecto) para wa.me.
+  static String? normalizeWhatsapp(String? s) {
+    var t = (s ?? '').replaceAll(RegExp(r'[^0-9]'), '');
+    if (t.isEmpty) return null;
+    if (t.startsWith('00')) t = t.substring(2);
+    if (t.startsWith('0')) t = t.substring(1);
+    if (!t.startsWith('54')) {
+      // Número local: se quita el 15 del celular si viene después del código de área.
+      t = t.replaceFirstMapped(RegExp(r'^(\d{2,4})15(\d{6,8})$'), (m) => '${m[1]}${m[2]}');
+      t = '549$t';
+    } else if (!t.startsWith('549')) {
+      t = '549${t.substring(2)}';
+    }
+    return t.length >= 11 && t.length <= 15 ? t : null;
+  }
+
+  static Uri whatsappUri(String number, {String? text}) => Uri.parse(
+      'https://wa.me/$number${text == null ? '' : '?text=${Uri.encodeComponent(text)}'}');
 
   static String? _instagram(String? s) {
     var t = _clean(s);

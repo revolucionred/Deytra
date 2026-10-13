@@ -15,6 +15,9 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'auth_page_model.dart';
+import '/deytra/deytra_ui.dart';
+import '/deytra/legal_page.dart';
+import '/deytra/password_reset.dart';
 export 'auth_page_model.dart';
 
 class AuthPageWidget extends StatefulWidget {
@@ -530,6 +533,52 @@ class _AuthPageWidgetState extends State<AuthPageWidget>
                                   disabledColor: Color(0xFFD9D4CB),
                                   disabledTextColor: Color(0xFF5E5A54),
                                 ),
+                              ),
+                            ),
+                            Align(
+                              alignment: Alignment.center,
+                              child: TextButton(
+                                onPressed: () => showForgotPassword(context,
+                                    email: _model
+                                        .emailAddressTextController?.text),
+                                child: Text('¿Olvidaste tu contraseña?',
+                                    style: DText.body(14,
+                                        weight: FontWeight.w600,
+                                        color: DColors.action)),
+                              ),
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 16),
+                              child: Wrap(
+                                alignment: WrapAlignment.center,
+                                children: [
+                                  Text('Al entrar aceptás los ',
+                                      style: DText.body(12,
+                                          color: DColors.muted)),
+                                  InkWell(
+                                    onTap: () => Navigator.of(context).push(
+                                        MaterialPageRoute(
+                                            builder: (_) => const LegalPageWidget(
+                                                doc: LegalDoc.terms))),
+                                    child: Text('términos',
+                                        style: DText.body(12,
+                                            weight: FontWeight.w600,
+                                            color: DColors.action)),
+                                  ),
+                                  Text(' y la ',
+                                      style: DText.body(12,
+                                          color: DColors.muted)),
+                                  InkWell(
+                                    onTap: () => Navigator.of(context).push(
+                                        MaterialPageRoute(
+                                            builder: (_) => const LegalPageWidget(
+                                                doc: LegalDoc.privacy))),
+                                    child: Text('política de privacidad',
+                                        style: DText.body(12,
+                                            weight: FontWeight.w600,
+                                            color: DColors.action)),
+                                  ),
+                                ],
                               ),
                             ),
                             if (false)
