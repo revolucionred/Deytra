@@ -1,0 +1,314 @@
+// Cuenta: mi perfil, lo que ofrezco, cerrar sesión y eliminar la cuenta.
+import 'package:flutter/material.dart';
+import '/auth/supabase_auth/auth_util.dart';
+import '/flutter_flow/flutter_flow_util.dart';
+import '/index.dart';
+import 'deytra_data.dart';
+import 'deytra_ui.dart';
+import 'offer_page.dart';
+
+class AccountPageWidget extends StatefulWidget {
+  const AccountPageWidget({super.key});
+  static String routeName = 'AccountPage';
+  static String routePath = '/cuenta';
+  @override
+  State<AccountPageWidget> createState() => _AccountPageWidgetState();
+}
+
+class _AccountPageWidgetState extends State<AccountPageWidget> {
+  final _name = TextEditingController();
+  final _city = TextEditingController();
+  final _bio = TextEditingController();
+  final _instagram = TextEditingController();
+  Map<String, dynamic>? _entity;
+  List<Map<String, dynamic>> _offers = [];
+  bool _loading = true;
+  bool _saving = false;
+  bool _deleting = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _city.dispose();
+    _bio.dispose();
+    _instagram.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final entity = await DeytraData.myEntity();
+      final offers = entity == null
+          ? <Map<String, dynamic>>[]
+          : await DeytraData.myOffers(entity['id'].toString());
+      if (!mounted) return;
+      setState(() {
+        _entity = entity;
+        _offers = offers;
+        _name.text = (entity?['name'] ?? '').toString();
+        _city.text = (entity?['city'] ?? '').toString();
+        _bio.text = (entity?['description'] ?? '').toString();
+        _instagram.text = (entity?['instagram_url'] ?? '')
+            .toString()
+            .replaceFirst(RegExp(r'^https?://(www\.)?instagram\.com/'), '@');
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = DeytraData.friendlyError(e);
+      });
+    }
+  }
+
+  Future<void> _saveProfile() async {
+    if (_entity == null) return;
+    if (_name.text.trim().length < 2) {
+      showDMessage(context, 'Tu nombre no puede quedar vacío.', error: true);
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      await DeytraData.updateProfile(
+        entityId: _entity!['id'].toString(),
+        name: _name.text,
+        city: _city.text,
+        description: _bio.text,
+        instagramUrl: _instagram.text,
+      );
+      if (mounted) showDMessage(context, 'Perfil actualizado.');
+    } catch (e) {
+      if (mounted) showDMessage(context, DeytraData.friendlyError(e), error: true);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _openOffer([Map<String, dynamic>? offer]) async {
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => OfferPageWidget(offer: offer)),
+    );
+    if (changed == true) _load();
+  }
+
+  Future<void> _toggle(Map<String, dynamic> o) async {
+    try {
+      await DeytraData.setOfferActive(o['id'].toString(), o['is_active'] != true);
+      await _load();
+    } catch (e) {
+      if (mounted) showDMessage(context, DeytraData.friendlyError(e), error: true);
+    }
+  }
+
+  Future<void> _remove(Map<String, dynamic> o) async {
+    final ok = await confirmD(context,
+        title: '¿Eliminar esta publicación?',
+        detail: 'Deja de aparecer en las búsquedas. No se puede deshacer.',
+        confirm: 'Eliminar',
+        danger: true);
+    if (!ok) return;
+    try {
+      await DeytraData.deleteOffer(o['id'].toString());
+      await _load();
+    } catch (e) {
+      if (mounted) showDMessage(context, DeytraData.friendlyError(e), error: true);
+    }
+  }
+
+  Future<void> _logout() async {
+    await authManager.signOut();
+    if (!mounted) return;
+    context.goNamedAuth(AuthPageWidget.routeName, context.mounted);
+  }
+
+  Future<void> _deleteAccount() async {
+    final ok = await confirmD(context,
+        title: '¿Eliminar tu cuenta?',
+        detail:
+            'Se borran tu perfil, lo que publicaste, tus búsquedas y tus conexiones. No se puede deshacer.',
+        confirm: 'Eliminar cuenta',
+        danger: true);
+    if (!ok) return;
+    setState(() => _deleting = true);
+    try {
+      await DeytraData.deleteAccount();
+      if (!mounted) return;
+      context.goNamedAuth(AuthPageWidget.routeName, context.mounted);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _deleting = false);
+        showDMessage(context, DeytraData.friendlyError(e), error: true);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: DColors.cream,
+      appBar: const DHeader(title: 'Tu cuenta'),
+      body: SafeArea(
+        child: _loading
+            ? const Center(child: CircularProgressIndicator(color: DColors.burnt))
+            : _error != null
+                ? Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: DEmpty(
+                      title: 'No pudimos cargar tu cuenta',
+                      detail: _error!,
+                      action: DButton(
+                          label: 'Reintentar', onPressed: _load, expand: false),
+                    ),
+                  )
+                : ListView(
+                    padding: const EdgeInsets.fromLTRB(24, 8, 24, 40),
+                    children: [
+                      Text('LO QUE OFRECÉS', style: DText.label()),
+                      const SizedBox(height: 10),
+                      if (_offers.isEmpty)
+                        DCard(
+                          onTap: () => _openOffer(),
+                          child: Row(children: [
+                            Container(
+                              width: 44,
+                              height: 44,
+                              padding: const EdgeInsets.all(11),
+                              decoration: BoxDecoration(
+                                  color: DColors.peach,
+                                  borderRadius: BorderRadius.circular(14)),
+                              child: const DIcon('opportunity',
+                                  color: DColors.burnt),
+                            ),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text('Publicá lo que sabés hacer',
+                                        style: DText.display(16)),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                        'Cocinar, enseñar, arreglar, cuidar. Todo suma.',
+                                        style: DText.body(13,
+                                            color: DColors.muted)),
+                                  ]),
+                            ),
+                            const DIcon('arrow-right', size: 20),
+                          ]),
+                        )
+                      else ...[
+                        for (final o in _offers)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: _offerCard(o),
+                          ),
+                        DButton(
+                            label: 'Agregar otra',
+                            secondary: true,
+                            onPressed: () => _openOffer()),
+                      ],
+                      const SizedBox(height: 32),
+                      Text('TU PERFIL', style: DText.label()),
+                      const SizedBox(height: 10),
+                      DField(controller: _name, label: 'Nombre', maxLength: 60),
+                      const SizedBox(height: 16),
+                      DField(
+                          controller: _city,
+                          label: 'Ciudad',
+                          hint: 'Ej.: Carcarañá',
+                          maxLength: 80),
+                      const SizedBox(height: 16),
+                      DField(
+                          controller: _bio,
+                          label: 'Sobre vos',
+                          maxLines: 4,
+                          maxLength: 400),
+                      const SizedBox(height: 16),
+                      DField(
+                        controller: _instagram,
+                        label: 'Instagram',
+                        hint: '@tuusuario',
+                        maxLength: 80,
+                        helper:
+                            'Solo lo ve quien aceptaste como conexión, para que pueda escribirte.',
+                      ),
+                      const SizedBox(height: 20),
+                      DButton(
+                          label: 'Guardar perfil',
+                          busy: _saving,
+                          onPressed: _saveProfile),
+                      const SizedBox(height: 40),
+                      DButton(
+                          label: 'Cerrar sesión',
+                          secondary: true,
+                          onPressed: _logout),
+                      const SizedBox(height: 12),
+                      DButton(
+                          label: 'Eliminar mi cuenta',
+                          danger: true,
+                          busy: _deleting,
+                          onPressed: _deleteAccount),
+                    ],
+                  ),
+      ),
+    );
+  }
+
+  Widget _offerCard(Map<String, dynamic> o) {
+    final active = o['is_active'] == true;
+    final details = [
+      (o['category_raw'] ?? '').toString(),
+      modalityLabel(o['modality']?.toString()),
+      (o['city'] ?? '').toString(),
+    ].where((s) => s.isNotEmpty).join(' · ');
+    return DCard(
+      onTap: () => _openOffer(o),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(
+              child: Text((o['title'] ?? '').toString(),
+                  style: DText.display(16))),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: active ? const Color(0xFFE6F2EC) : DColors.cream,
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(active ? 'Visible' : 'Pausada',
+                style: DText.body(12,
+                    weight: FontWeight.w600,
+                    color: active ? DColors.success : DColors.muted)),
+          ),
+        ]),
+        const SizedBox(height: 4),
+        Text(details, style: DText.body(13, color: DColors.muted)),
+        const SizedBox(height: 8),
+        Row(children: [
+          TextButton(
+            onPressed: () => _toggle(o),
+            child: Text(active ? 'Pausar' : 'Volver a mostrar',
+                style: DText.body(14,
+                    weight: FontWeight.w600, color: DColors.action)),
+          ),
+          TextButton(
+            onPressed: () => _remove(o),
+            child: Text('Eliminar',
+                style: DText.body(14, color: DColors.error)),
+          ),
+        ]),
+      ]),
+    );
+  }
+}
