@@ -1,0 +1,27 @@
+# Supabase pausa los proyectos gratuitos después de unos días sin uso.
+# Esta tarea hace una consulta mínima cada 3 días para que Deytra siga activa.
+# Usa solo la clave pública de la app (la misma que ya está dentro de la app).
+name: Mantener Deytra activa
+
+on:
+  schedule:
+    - cron: "17 13 */3 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Consulta mínima a la base
+        run: |
+          URL=$(grep -oP "_kSupabaseUrl = '\K[^']+" lib/backend/supabase/supabase.dart)
+          KEY=$(grep -oP "_kSupabaseAnonKey =\s*'\K[^']+" lib/backend/supabase/supabase.dart || true)
+          if [ -z "$KEY" ]; then KEY=$(tr -d '\n ' < lib/backend/supabase/supabase.dart | grep -oP "_kSupabaseAnonKey='\K[^']+"); fi
+          code=$(curl -s -o /dev/null -w "%{http_code}" "$URL/rest/v1/categories?select=id&limit=1" -H "apikey: $KEY" -H "Authorization: Bearer $KEY")
+          echo "Respuesta de Supabase: $code"
+          [ "$code" -lt 500 ]

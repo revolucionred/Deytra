@@ -207,18 +207,75 @@ class DeytraData {
     }
   }
 
-  /// Solicitudes pendientes y mensajes sin leer, para los avisos del inicio.
-  static Future<({int requests, int unread})> badges() async {
+  /// Solicitudes pendientes, mensajes y avisos sin leer, para el inicio.
+  static Future<({int requests, int unread, int notifications})> badges() async {
     try {
       final rows = await _db.rpc('my_badges').timeout(_timeout);
       final row = rows is List && rows.isNotEmpty ? rows.first as Map : const {};
       return (
         requests: (row['pending_requests'] as num?)?.toInt() ?? 0,
         unread: (row['unread_messages'] as num?)?.toInt() ?? 0,
+        notifications: (row['unread_notifications'] as num?)?.toInt() ?? 0,
       );
     } catch (_) {
-      return (requests: 0, unread: 0);
+      return (requests: 0, unread: 0, notifications: 0);
     }
+  }
+
+  // ---------- Avisos y alertas ----------
+  /// "Avisame cuando aparezca": guarda la búsqueda y avisa cuando alguien la publique.
+  static Future<void> createAlert(String intentId) => _db.rpc(
+      'create_search_alert',
+      params: {'p_intent_id': intentId}).timeout(_timeout);
+
+  static Future<List<Map<String, dynamic>>> notifications() async {
+    final rows = await _db
+        .from('notifications')
+        .select('id,kind,title,body,search_text,connection_id,created_at,read_at')
+        .order('created_at', ascending: false)
+        .limit(100)
+        .timeout(_timeout);
+    return (rows as List).map((e) => Map<String, dynamic>.from(e)).toList();
+  }
+
+  static Future<void> markNotificationsRead() async {
+    try {
+      await _db.rpc('mark_notifications_read').timeout(_timeout);
+    } catch (_) {
+      // No debe interrumpir la pantalla.
+    }
+  }
+
+  static Future<List<Map<String, dynamic>>> myAlerts() async {
+    final rows = await _db
+        .from('search_alerts')
+        .select('id,search_text,city,active,created_at,expires_at')
+        .eq('active', true)
+        .gt('expires_at', DateTime.now().toUtc().toIso8601String())
+        .order('created_at', ascending: false)
+        .timeout(_timeout);
+    return (rows as List).map((e) => Map<String, dynamic>.from(e)).toList();
+  }
+
+  static Future<void> stopAlert(String id) => _db
+      .from('search_alerts')
+      .update({'active': false})
+      .eq('id', id)
+      .timeout(_timeout);
+
+  // ---------- Panel de la dueña ----------
+  static Future<bool> isAdmin() async {
+    try {
+      return await _db.rpc('is_deytra_admin').timeout(_timeout) == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<Map<String, dynamic>> adminOverview(int days) async {
+    final r = await _db
+        .rpc('admin_overview', params: {'p_days': days}).timeout(_timeout);
+    return Map<String, dynamic>.from(r as Map);
   }
 
   // ---------- Seguridad ----------

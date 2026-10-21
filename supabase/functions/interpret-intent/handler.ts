@@ -1,6 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2.117.2";
 import { cors, reply, validTz, interpret, norm } from "./interpretation.ts";
-import { geocode } from "./geo.ts";
+import { geocode, type Geo } from "./geo.ts";
 import { aiConfig, aiInterpret, aiWebSuggestions, type Suggestion } from "./ai.ts";
 import {
   rankCapabilities,
@@ -195,7 +195,32 @@ export async function handleRequest(
       intent.location_raw = owned.city;
       intent.location_source = "profile";
     } else intent.location_source = intent.city ? "stated" : "none";
+    // Guarda las localidades reconocidas: los avisos de "Avisame" las usan para medir distancias.
+    const remember = async (pairs: [string, Geo | null][]) => {
+      const rows = pairs
+        .filter((p): p is [string, Geo] => !!p[1])
+        .map(([raw, g]) => ({
+          name_norm: norm(raw),
+          name: g.name,
+          province: g.province,
+          latitude: g.lat,
+          longitude: g.lon,
+          updated_at: new Date().toISOString(),
+        }));
+      if (!rows.length || !serviceKey) return;
+      try {
+        await factory(url, serviceKey, {
+          auth: { persistSession: false, autoRefreshToken: false },
+        })
+          .from("geo_places")
+          .upsert(rows, { onConflict: "name_norm" });
+      } catch {
+        // Nunca debe frenar una búsqueda.
+      }
+    };
+    const rawCity = intent.city;
     const place = intent.city ? await geocode(intent.city) : null;
+    if (rawCity && place) await remember([[rawCity, place], [place.name, place]]);
     if (place) {
       intent.city = place.name;
       intent.province = place.province;
@@ -450,9 +475,11 @@ export async function handleRequest(
           .map((x) => x.city as string),
       ),
     ].slice(0, 40);
-    const located = new Map(
-      (await Promise.all(pending.map(async (name) => [name, await geocode(name)] as const))),
+    const geocoded = await Promise.all(
+      pending.map(async (name) => [name, await geocode(name)] as [string, Geo | null]),
     );
+    const located = new Map(geocoded);
+    await remember(geocoded);
     for (const cand of candidates) {
       const g = cand.latitude == null && cand.city ? located.get(cand.city) : null;
       if (g) {

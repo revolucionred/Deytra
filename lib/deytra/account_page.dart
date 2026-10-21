@@ -6,6 +6,7 @@ import '/flutter_flow/flutter_flow_util.dart';
 import '/index.dart';
 import 'deytra_data.dart';
 import 'deytra_ui.dart';
+import 'admin_page.dart';
 import 'legal_page.dart';
 import 'offer_page.dart';
 
@@ -28,6 +29,7 @@ class _AccountPageWidgetState extends State<AccountPageWidget> {
   bool _loading = true;
   bool _saving = false;
   bool _deleting = false;
+  bool _isAdmin = false;
   String? _error;
 
   @override
@@ -53,6 +55,7 @@ class _AccountPageWidgetState extends State<AccountPageWidget> {
     });
     try {
       final entity = await DeytraData.myEntity();
+      final admin = await DeytraData.isAdmin();
       final offers = entity == null
           ? <Map<String, dynamic>>[]
           : await DeytraData.myOffers(entity['id'].toString());
@@ -60,6 +63,7 @@ class _AccountPageWidgetState extends State<AccountPageWidget> {
       setState(() {
         _entity = entity;
         _offers = offers;
+        _isAdmin = admin;
         _name.text = (entity?['name'] ?? '').toString();
         _city.text = (entity?['city'] ?? '').toString();
         _bio.text = (entity?['description'] ?? '').toString();
@@ -189,6 +193,32 @@ class _AccountPageWidgetState extends State<AccountPageWidget> {
                 : ListView(
                     padding: const EdgeInsets.fromLTRB(24, 8, 24, 40),
                     children: [
+                      if (_isAdmin) ...[
+                        DCard(
+                          onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                  builder: (_) => const AdminPageWidget())),
+                          child: Row(children: [
+                            const Icon(Icons.insights_outlined,
+                                color: DColors.burnt),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text('Panel de Deytra',
+                                        style: DText.display(16)),
+                                    Text(
+                                        'Uso, lo que falta en la app, gasto de IA y denuncias',
+                                        style: DText.body(13,
+                                            color: DColors.muted)),
+                                  ]),
+                            ),
+                            const DIcon('arrow-right', size: 20),
+                          ]),
+                        ),
+                        const SizedBox(height: 28),
+                      ],
                       Text('LO QUE OFRECÉS', style: DText.label()),
                       const SizedBox(height: 10),
                       if (_offers.isEmpty)

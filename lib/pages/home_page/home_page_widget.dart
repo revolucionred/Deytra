@@ -23,6 +23,7 @@ import '/deytra/offer_page.dart';
 import '/deytra/connections_page.dart';
 import '/deytra/account_page.dart';
 import '/deytra/deytra_data.dart';
+import '/deytra/notifications_page.dart';
 import '/deytra/password_reset.dart';
 export 'home_page_model.dart';
 
@@ -46,6 +47,7 @@ class _HomePageWidgetState extends State<HomePageWidget>
 
   // Avisos: solicitudes pendientes y mensajes sin leer.
   int _badge = 0;
+  int _news = 0;
   Timer? _badgeTimer;
 
   bool _recovering = false;
@@ -58,8 +60,12 @@ class _HomePageWidgetState extends State<HomePageWidget>
 
   Future<void> _loadBadges() async {
     final b = await DeytraData.badges();
-    if (mounted && b.requests + b.unread != _badge) {
-      setState(() => _badge = b.requests + b.unread);
+    if (!mounted) return;
+    if (b.requests + b.unread != _badge || b.notifications != _news) {
+      setState(() {
+        _badge = b.requests + b.unread;
+        _news = b.notifications;
+      });
     }
   }
 
@@ -254,6 +260,10 @@ class _HomePageWidgetState extends State<HomePageWidget>
                 actions: [
                   _headerAction(context, 'opportunity', 'Ofrecer algo',
                       const OfferPageWidget()),
+                  _headerAction(context, '', 'Avisos',
+                      const NotificationsPageWidget(),
+                      badge: _news,
+                      material: Icons.notifications_none_rounded),
                   _headerAction(context, 'connect', 'Conexiones',
                       const ConnectionsPageWidget(),
                       badge: _badge),
@@ -612,7 +622,7 @@ class _HomePageWidgetState extends State<HomePageWidget>
 
   Widget _headerAction(
           BuildContext context, String icon, String label, Widget page,
-          {int badge = 0}) =>
+          {int badge = 0, IconData? material}) =>
       IconButton(
         tooltip: badge > 0 ? '$label ($badge nuevas)' : label,
         onPressed: () async {
@@ -621,7 +631,9 @@ class _HomePageWidgetState extends State<HomePageWidget>
           _loadBadges();
         },
         icon: Stack(clipBehavior: Clip.none, children: [
-          DIcon(icon, size: 24, color: Colors.white),
+          material != null
+              ? Icon(material, size: 26, color: Colors.white)
+              : DIcon(icon, size: 24, color: Colors.white),
           if (badge > 0)
             Positioned(
               right: -7,

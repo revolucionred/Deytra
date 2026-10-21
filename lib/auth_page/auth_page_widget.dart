@@ -18,6 +18,7 @@ import 'auth_page_model.dart';
 import '/deytra/deytra_ui.dart';
 import '/deytra/legal_page.dart';
 import '/deytra/password_reset.dart';
+import '/deytra/intro_slides.dart';
 export 'auth_page_model.dart';
 
 class AuthPageWidget extends StatefulWidget {
@@ -41,6 +42,9 @@ class _AuthPageWidgetState extends State<AuthPageWidget>
   @override
   void initState() {
     super.initState();
+    // Placas de bienvenida: solo la primera vez en este dispositivo.
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => showIntroIfNeeded(context));
     _model = createModel(context, () => AuthPageModel());
 
     _model.emailAddressTextController ??= TextEditingController();

@@ -14,6 +14,7 @@ import 'dart:async';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show FunctionException;
+import '/deytra/deytra_data.dart';
 
 Future<void> openDeytraSearch(
   BuildContext context,
@@ -55,6 +56,8 @@ class _DeytraSearchDialogState extends State<_DeytraSearchDialog> {
   late String _entityId = widget.entityId.trim();
   late final String? _ownerId = widget.ownerId;
   String? _intentId;
+  String? _alertFor; // búsqueda para la que ya se pidió aviso
+  bool _alertBusy = false;
   String? _pendingAnswer;
   String? _fieldError;
   String _status = 'loading';
@@ -857,6 +860,7 @@ class _DeytraSearchDialogState extends State<_DeytraSearchDialog> {
             _place.isEmpty
                 ? 'Apenas alguien lo publique, va a aparecer acá.'
                 : 'Buscamos cerca de $_place. Apenas alguien lo publique, va a aparecer acá.'),
+        _alertBox(),
         ..._suggestionSection(),
       ];
     return [
@@ -893,8 +897,69 @@ class _DeytraSearchDialogState extends State<_DeytraSearchDialog> {
         _notice('No había opciones a menos de 30 km, así que ampliamos la búsqueda.',
             icon: Icons.radar_outlined),
       ..._matches.map(_card),
+      if (_matches.length < 3) _alertBox(),
       ..._suggestionSection(),
     ];
+  }
+
+  /// "Avisame cuando aparezca": guarda la búsqueda y avisa cuando alguien la publique.
+  Widget _alertBox() {
+    final id = _intentId;
+    if (id == null) return const SizedBox.shrink();
+    final saved = _alertFor == id;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 14),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+          color: saved ? const Color(0xFFE6F2EC) : const Color(0xFFFFEFE4),
+          borderRadius: BorderRadius.circular(16)),
+      child: Row(children: [
+        Icon(saved ? Icons.check_circle_outline : Icons.notifications_active_outlined,
+            color: saved ? const Color(0xFF24734F) : _burnt, size: 22),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+              saved
+                  ? 'Listo. Te avisamos en Avisos cuando alguien lo publique.'
+                  : '¿Querés que te avisemos cuando alguien lo ofrezca?',
+              style: _type(14, weight: FontWeight.w600)),
+        ),
+        if (!saved) ...[
+          const SizedBox(width: 8),
+          TextButton(
+            onPressed: _alertBusy
+                ? null
+                : () async {
+                    setState(() => _alertBusy = true);
+                    try {
+                      await DeytraData.createAlert(id);
+                      if (mounted) setState(() => _alertFor = id);
+                    } catch (_) {
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                            content: Text('No pudimos guardar el aviso. Probá de nuevo.')));
+                      }
+                    } finally {
+                      if (mounted) setState(() => _alertBusy = false);
+                    }
+                  },
+            style: TextButton.styleFrom(
+              backgroundColor: _charcoal,
+              minimumSize: const Size(0, 40),
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            child: _alertBusy
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                : Text('Avisame', style: _type(14, weight: FontWeight.w700, color: Colors.white)),
+          ),
+        ],
+      ]),
+    );
   }
 
   List<Widget> _suggestionSection() {
