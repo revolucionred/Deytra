@@ -53,8 +53,8 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId "com.mycompany.deytra"
+        // Identificador definitivo en Google Play (no se puede cambiar después de publicar).
+        applicationId "com.revolucionred.deytra"
         minSdkVersion 24
         targetSdkVersion 36
         versionCode flutterVersionCode.toInteger()
@@ -72,9 +72,9 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig signingConfigs.debug
+            // Con la clave de subida cargada (key.properties, se crea en GitHub Actions
+            // desde los secretos), se firma para Google Play; si no, firma de prueba.
+            signingConfig keystorePropertiesFile.exists() ? signingConfigs.release : signingConfigs.debug
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
